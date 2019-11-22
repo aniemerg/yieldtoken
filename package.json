@@ -7,7 +7,8 @@
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prettier:solidity": "./node_modules/.bin/prettier --write 'contracts/**/*.sol'"
   },
   "keywords": [],
   "author": "",
@@ -22,6 +23,8 @@
   },
   "devDependencies": {
     "@gnosis.pm/mock-contract": "^3.0.7",
+    "prettier": "^1.19.1",
+    "prettier-plugin-solidity": "^1.0.0-alpha.34",
     "solidity-coverage": "^0.6.7",
     "truffle": "^5.0.44"
   }

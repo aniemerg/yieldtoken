@@ -3,10 +3,11 @@ pragma solidity ^0.5.2;
 import './yToken.sol';
 import './oracle/Oracle.sol';
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-
+import "./libraries/ExponentialOperations.sol";
 
 contract Treasurer {
   using SafeMath for uint256;
+  using ExponentialOperations for uint256;
 
   struct Repo {
       uint256 locked;   // Locked Collateral
@@ -34,18 +35,6 @@ contract Treasurer {
     owner = owner_;
     collateralRatio = collateralRatio_;
     minCollateralRatio = minCollateralRatio_;
-  }
-
-  // --- Math ---
-  uint constant WAD = 10 ** 18;
-  uint constant RAY = 10 ** 27;
-
-  function wmul(uint x, uint y) internal pure returns (uint z) {
-    z = x.mul(y).add(WAD / 2) / WAD;
-  }
-
-  function wdiv(uint x, uint y) internal pure returns (uint z) {
-    z = x.mul(WAD).add(y / 2) / y;
   }
 
   // --- Views ---
@@ -110,7 +99,7 @@ contract Treasurer {
 
     Repo memory repo = repos[series][msg.sender];
     uint rate        = peek(); // to add rate getter!!!
-    uint256 min      = wmul(wmul(made, collateralRatio), rate);
+    uint256 min      = made.wmul(collateralRatio).wmul(rate);
     require (paid >= min, "treasurer-make-insufficient-collateral-for-those-tokens");
 
     // lock msg.sender Collateral, add debt
@@ -142,7 +131,7 @@ contract Treasurer {
     uint rlocked  = repo.locked.sub(released);
     uint rdebt    = repo.debt.sub(credit);
     uint rate     = peek(); // to add rate getter!!!
-    uint256 min   = wmul(wmul(rdebt, collateralRatio), rate);
+    uint256 min   = rdebt.wmul(collateralRatio).wmul(rate);
     uint deficiency = 0;
     if (min >= rlocked){
       deficiency = min.sub(rlocked);
@@ -166,7 +155,7 @@ contract Treasurer {
     uint rlocked  = repo.locked.sub(released);
     uint rdebt    = repo.debt.sub(credit);
     uint rate     = peek(); // to add rate getter!!!
-    uint256 min   = wmul(wmul(rdebt, collateralRatio), rate);
+    uint256 min   = rdebt.wmul(collateralRatio).wmul(rate);
     require(rlocked >= min, "treasurer-wipe-insufficient-remaining-collateral");
 
     //burn tokens
@@ -192,7 +181,7 @@ contract Treasurer {
     //check that repo is in danger zone
     Repo memory repo  = repos[series][bum];
     uint rate         = peek(); // to add rate getter!!!
-    uint256 min       = wmul(wmul(repo.debt, minCollateralRatio), rate);
+    uint256 min       = repo.debt.wmul(minCollateralRatio).wmul(rate);
     require(repo.locked < min, "treasurer-bite-still-safe");
 
     //burn tokens
@@ -200,14 +189,14 @@ contract Treasurer {
     yT.burnByOwner(msg.sender, amount);
 
     //update repo
-    uint256 bitten     = wmul(wmul(amount, minCollateralRatio), rate);
+    uint256 bitten     = amount.wmul(minCollateralRatio).wmul(rate);
     repo.locked        = repo.locked.sub(bitten);
     repo.debt          = repo.debt.sub(amount);
     repos[series][bum] = repo;
-
     // send bitten funds
     msg.sender.transfer(bitten);
   }
+
 
   // trigger settlement
   // series - yToken of debt to settle
@@ -231,12 +220,12 @@ contract Treasurer {
     yT.burnByOwner(msg.sender, amount);
 
     uint rate     = settled[series];
-    uint256 goods = wmul(amount, rate);
+    uint256 goods = amount.wmul(rate);
     msg.sender.transfer(goods);
   }
 
-  // close repo and retrieve remaining Ether
   // series - matured yToken
+  // close repo and retrieve remaining Ether
   function close(uint series) external {
     require(series < totalSeries, "treasurer-close-unissued-series");
     require(now > yTokens[series].when, "treasurer-withdraw-yToken-hasnt-matured");
@@ -244,10 +233,10 @@ contract Treasurer {
 
     Repo memory repo = repos[series][msg.sender];
     uint rate        = settled[series]; // to add rate getter!!!
-    uint remainder   = wmul(repo.debt, rate);
+    uint remainder   = repo.debt.wmul(rate);
 
     require(repo.locked > remainder, "treasurer-settlement-repo-underfunded-at-settlement" );
-    uint256 goods  = repo.locked.sub(wmul(repo.debt, rate));
+    uint256 goods  = repo.locked.sub(repo.debt.wmul(rate));
     repo.locked    = 0;
     repo.debt      = 0;
     repos[series][msg.sender] = repo;
