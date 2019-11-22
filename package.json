@@ -7,8 +7,9 @@
     "test": "test"
   },
   "scripts": {
+    "lint": "./node_modules/.bin/eslint .",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "prettier:solidity": "./node_modules/.bin/prettier --write 'contracts/**/*.sol'"
+    "prettier": "./node_modules/.bin/prettier --write 'contracts/**/*.sol'"
   },
   "keywords": [],
   "author": "",

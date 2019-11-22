@@ -20,7 +20,7 @@ contract Treasurer is Ownable {
     mapping(address => uint256) public unlocked; // unlocked ETH
     mapping(uint256 => uint256) public settled; // settlement price of collateral
     uint256[] public issuedSeries;
-    address public oracle;
+    Oracle public oracle;
     uint256 public collateralRatio; // collateralization ratio
     uint256 public minCollateralRatio; // minimum collateralization ratio
     uint256 public totalSeries = 0;
@@ -37,14 +37,18 @@ contract Treasurer is Ownable {
 
     // provide address to oracle
     // oracle_ - address of the oracle contract
-    function setOracle(address oracle_) external onlyOwner {
+    function setOracle(Oracle oracle_) external onlyOwner {
+        require(address(oracle) == address(0), "oracle was already set");
         oracle = oracle_;
     }
 
     // get oracle value
-    function peek() public view returns (uint256 r) {
-        Oracle _oracle = Oracle(oracle);
-        r = _oracle.read();
+    function getSettlmentVSCollateralTokenRate()
+        public
+        view
+        returns (uint256 r)
+    {
+        r = oracle.read();
     }
 
     // issue new yToken
@@ -92,7 +96,7 @@ contract Treasurer is Ownable {
         );
 
         Repo memory repo = repos[series][msg.sender];
-        uint256 rate = peek(); // to add rate getter!!!
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
         uint256 min = made.wmul(collateralRatio).wmul(rate);
         require(
             paid >= min,
@@ -138,7 +142,7 @@ contract Treasurer is Ownable {
         // if would be undercollateralized after freeing clean, fail
         uint256 rlocked = repo.lockedCollateralAmount.sub(released);
         uint256 rdebt = repo.debtAmount.sub(credit);
-        uint256 rate = peek(); // to add rate getter!!!
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
         uint256 min = rdebt.wmul(collateralRatio).wmul(rate);
         uint256 deficiency = 0;
         if (min >= rlocked) {
@@ -171,7 +175,7 @@ contract Treasurer is Ownable {
         // if would be undercollateralized after freeing clean, fail
         uint256 rlocked = repo.lockedCollateralAmount.sub(released);
         uint256 rdebt = repo.debtAmount.sub(credit);
-        uint256 rate = peek(); // to add rate getter!!!
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
         uint256 min = rdebt.wmul(collateralRatio).wmul(rate);
         require(
             rlocked >= min,
@@ -202,7 +206,7 @@ contract Treasurer is Ownable {
         require(series < totalSeries, "treasurer-liquidate-unissued-series");
         //check that repo is in danger zone
         Repo memory repo = repos[series][bum];
-        uint256 rate = peek(); // to add rate getter!!!
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
         uint256 min = repo.debtAmount.wmul(minCollateralRatio).wmul(rate);
         require(repo.lockedCollateralAmount < min, "treasurer-bite-still-safe");
 
@@ -230,7 +234,7 @@ contract Treasurer is Ownable {
             settled[series] == 0,
             "treasurer-settlement-settlement-already-called"
         );
-        settled[series] = peek();
+        settled[series] = getSettlmentVSCollateralTokenRate();
     }
 
     // redeem tokens for underlying Ether
