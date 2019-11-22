@@ -1,12 +1,13 @@
 pragma solidity ^0.5.2;
-pragma experimental ABIEncoderV2;
 
 import './yToken.sol';
-import './Oracle.sol';
-
+import './oracle/Oracle.sol';
+import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 
 
 contract Treasurer {
+  using SafeMath for uint256;
+
   struct Repo {
       uint256 locked;   // Locked Collateral
       uint256 unminted;   // unminted
@@ -38,25 +39,13 @@ contract Treasurer {
   // --- Math ---
   uint constant WAD = 10 ** 18;
   uint constant RAY = 10 ** 27;
-  function add(uint x, uint y) internal pure returns (uint z) {
-    z = x + y;
-    require(z >= x, "treasurer-add-z-not-greater-eq-x");
-  }
-
-  function sub(uint x, uint y) internal pure returns (uint z) {
-    require((z = x - y) <= x, "treasurer-sub-failed");
-  }
-
-  function mul(uint x, uint y) internal pure returns (uint z) {
-    require(y == 0 || (z = x * y) / y == x,  "treasurer-mul-failed");
-  }
 
   function wmul(uint x, uint y) internal pure returns (uint z) {
-    z = add(mul(x, y), WAD / 2) / WAD;
+    z = x.mul(y).add(WAD / 2) / WAD;
   }
 
   function wdiv(uint x, uint y) internal pure returns (uint z) {
-    z = add(mul(x, WAD), y / 2) / y;
+    z = x.mul(WAD).add(y / 2) / y;
   }
 
   // --- Views ---
@@ -98,7 +87,7 @@ contract Treasurer {
   // add collateral to repo
   function join() external payable {
     require(msg.value >= 0, "treasurer-join-collateralRatio-include-deposit");
-    unlocked[msg.sender] = add(unlocked[msg.sender], msg.value);
+    unlocked[msg.sender] = unlocked[msg.sender].add(msg.value);
   }
 
   // remove collateral from repo
@@ -106,7 +95,7 @@ contract Treasurer {
   // TO-DO: Update as described in https://diligence.consensys.net/posts/2019/09/stop-using-soliditys-transfer-now/
   function exit(uint amount) external {
     require(amount >= 0, "treasurer-exit-insufficient-balance");
-    unlocked[msg.sender] = sub(unlocked[msg.sender], amount);
+    unlocked[msg.sender] = unlocked[msg.sender].sub(amount);
     msg.sender.transfer(amount);
   }
 
@@ -125,9 +114,9 @@ contract Treasurer {
     require (paid >= min, "treasurer-make-insufficient-collateral-for-those-tokens");
 
     // lock msg.sender Collateral, add debt
-    unlocked[msg.sender]      = sub(unlocked[msg.sender], paid);
-    repo.locked               = add(repo.locked, paid);
-    repo.debt                 = add(repo.debt, made);
+    unlocked[msg.sender]      = unlocked[msg.sender].sub(paid);
+    repo.locked               = repo.locked.add(paid);
+    repo.debt                 = repo.debt.add(made);
     repos[series][msg.sender] = repo;
 
     // mint new yTokens
@@ -150,13 +139,13 @@ contract Treasurer {
     require(repo.locked >= released, "treasurer-wipe-release-more-than-locked");
     require(repo.debt >= credit,     "treasurer-wipe-wipe-more-debt-than-present");
     // if would be undercollateralized after freeing clean, fail
-    uint rlocked  = sub(repo.locked, released);
-    uint rdebt    = sub(repo.debt, credit);
+    uint rlocked  = repo.locked.sub(released);
+    uint rdebt    = repo.debt.sub(credit);
     uint rate     = peek(); // to add rate getter!!!
     uint256 min   = wmul(wmul(rdebt, collateralRatio), rate);
     uint deficiency = 0;
     if (min >= rlocked){
-      deficiency = sub(min, rlocked);
+      deficiency = min.sub(rlocked);
     }
     return (rlocked >= min, deficiency);
   }
@@ -174,8 +163,8 @@ contract Treasurer {
     require(repo.locked >= released, "treasurer-wipe-release-more-than-locked");
     require(repo.debt >= credit,     "treasurer-wipe-wipe-more-debt-than-present");
     // if would be undercollateralized after freeing clean, fail
-    uint rlocked  = sub(repo.locked, released);
-    uint rdebt    = sub(repo.debt, credit);
+    uint rlocked  = repo.locked.sub(released);
+    uint rdebt    = repo.debt.sub(credit);
     uint rate     = peek(); // to add rate getter!!!
     uint256 min   = wmul(wmul(rdebt, collateralRatio), rate);
     require(rlocked >= min, "treasurer-wipe-insufficient-remaining-collateral");
@@ -186,12 +175,12 @@ contract Treasurer {
     yT.burnFrom(msg.sender, credit);
 
     // reduce the collateral and the debt
-    repo.locked               = sub(repo.locked, released);
-    repo.debt                 = sub(repo.debt, credit);
+    repo.locked               = repo.locked.sub(released);
+    repo.debt                 = repo.debt.sub(credit);
     repos[series][msg.sender] = repo;
 
     // add collateral back to the unlocked
-    unlocked[msg.sender] = add(unlocked[msg.sender], released);
+    unlocked[msg.sender] = unlocked[msg.sender].add(released);
   }
 
   // liquidate a repo
@@ -212,8 +201,8 @@ contract Treasurer {
 
     //update repo
     uint256 bitten     = wmul(wmul(amount, minCollateralRatio), rate);
-    repo.locked        = sub(repo.locked, bitten);
-    repo.debt          = sub(repo.debt, amount);
+    repo.locked        = repo.locked.sub(bitten);
+    repo.debt          = repo.debt.sub(amount);
     repos[series][bum] = repo;
 
     // send bitten funds
@@ -258,7 +247,7 @@ contract Treasurer {
     uint remainder   = wmul(repo.debt, rate);
 
     require(repo.locked > remainder, "treasurer-settlement-repo-underfunded-at-settlement" );
-    uint256 goods  = sub(repo.locked, wmul(repo.debt, rate));
+    uint256 goods  = repo.locked.sub(wmul(repo.debt, rate));
     repo.locked    = 0;
     repo.debt      = 0;
     repos[series][msg.sender] = repo;

@@ -1,5 +1,4 @@
 pragma solidity ^0.5.2;
-pragma experimental ABIEncoderV2;
 
 //Using fake contract instead of abstract for mocking
 contract Oracle {
