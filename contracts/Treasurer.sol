@@ -4,8 +4,9 @@ import "./yToken.sol";
 import "./oracle/Oracle.sol";
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "./libraries/ExponentialOperations.sol";
+import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
 
-contract Treasurer {
+contract Treasurer is Ownable {
     using SafeMath for uint256;
     using ExponentialOperations for uint256;
 
@@ -25,18 +26,15 @@ contract Treasurer {
     mapping(address => uint256) public unlocked; // unlocked ETH
     mapping(uint256 => uint256) public settled; // settlement price of collateral
     uint256[] public issuedSeries;
-    address public owner;
     address public oracle;
     uint256 public collateralRatio; // collateralization ratio
     uint256 public minCollateralRatio; // minimum collateralization ratio
     uint256 public totalSeries = 0;
 
-    constructor(
-        address owner_,
-        uint256 collateralRatio_,
-        uint256 minCollateralRatio_
-    ) public {
-        owner = owner_;
+    constructor(uint256 collateralRatio_, uint256 minCollateralRatio_)
+        public
+        Ownable()
+    {
         collateralRatio = collateralRatio_;
         minCollateralRatio = minCollateralRatio_;
     }
@@ -52,8 +50,7 @@ contract Treasurer {
 
     // provide address to oracle
     // oracle_ - address of the oracle contract
-    function setOracle(address oracle_) external {
-        require(msg.sender == owner);
+    function setOracle(address oracle_) external onlyOwner {
         oracle = oracle_;
     }
 
@@ -64,8 +61,7 @@ contract Treasurer {
     }
 
     // issue new yToken
-    function issue(uint256 when) external returns (uint256 series) {
-        require(msg.sender == owner, "treasurer-issue-only-owner-may-issue");
+    function issue(uint256 when) external onlyOwner returns (uint256 series) {
         require(when > now, "treasurer-issue-maturity-is-in-past");
         series = totalSeries;
         require(
