@@ -11,13 +11,12 @@ contract Treasurer is Ownable {
     using ExponentialOperations for uint256;
 
     struct Repo {
-        uint256 locked; // Locked Collateral
-        uint256 unminted; // unminted
-        uint256 debt; // Debt
+        uint256 lockedCollateralAmount;
+        uint256 debtAmount;
     }
 
     mapping(uint256 => yToken) public yTokens;
-    mapping(uint256 => mapping(address => Repo)) public repos; // locked ETH and debt
+    mapping(uint256 => mapping(address => Repo)) public repos; // lockedCollateralAmount ETH and debtAmount
     mapping(address => uint256) public unlocked; // unlocked ETH
     mapping(uint256 => uint256) public settled; // settlement price of collateral
     uint256[] public issuedSeries;
@@ -32,13 +31,6 @@ contract Treasurer is Ownable {
     {
         collateralRatio = collateralRatio_;
         minCollateralRatio = minCollateralRatio_;
-    }
-
-    // --- Views ---
-
-    // return unlocked collateral balance
-    function balance(address usr) public view returns (uint256) {
-        return unlocked[usr];
     }
 
     // --- Actions ---
@@ -56,14 +48,14 @@ contract Treasurer is Ownable {
     }
 
     // issue new yToken
-    function issue(uint256 when) external onlyOwner returns (uint256 series) {
-        require(when > now, "treasurer-issue-maturity-is-in-past");
+    function issue(uint256 maturityTime) external returns (uint256 series) {
+        require(maturityTime > now, "treasurer-issue-maturity-is-in-past");
         series = totalSeries;
         require(
             address(yTokens[series]) == address(0),
             "treasurer-issue-may-not-reissue-series"
         );
-        yToken _token = new yToken(when);
+        yToken _token = new yToken(maturityTime);
         yTokens[series] = _token;
         issuedSeries.push(series);
         totalSeries = totalSeries + 1;
@@ -107,16 +99,16 @@ contract Treasurer is Ownable {
             "treasurer-make-insufficient-collateral-for-those-tokens"
         );
 
-        // lock msg.sender Collateral, add debt
+        // lock msg.sender Collateral, add debtAmount
         unlocked[msg.sender] = unlocked[msg.sender].sub(paid);
-        repo.locked = repo.locked.add(paid);
-        repo.debt = repo.debt.add(made);
+        repo.lockedCollateralAmount = repo.lockedCollateralAmount.add(paid);
+        repo.debtAmount = repo.debtAmount.add(made);
         repos[series][msg.sender] = repo;
 
         // mint new yTokens
         // first, ensure yToken is initialized and matures in the future
         require(
-            yTokens[series].when() > now,
+            yTokens[series].maturityTime() > now,
             "treasurer-make-invalid-or-matured-ytoken"
         );
         yTokens[series].mint(msg.sender, made);
@@ -136,16 +128,16 @@ contract Treasurer is Ownable {
         require(series < totalSeries, "treasurer-wipeCheck-unissued-series");
         Repo memory repo = repos[series][msg.sender];
         require(
-            repo.locked >= released,
+            repo.lockedCollateralAmount >= released,
             "treasurer-wipe-release-more-than-locked"
         );
         require(
-            repo.debt >= credit,
-            "treasurer-wipe-wipe-more-debt-than-present"
+            repo.debtAmount >= credit,
+            "treasurer-wipe-wipe-more-debtAmount-than-present"
         );
         // if would be undercollateralized after freeing clean, fail
-        uint256 rlocked = repo.locked.sub(released);
-        uint256 rdebt = repo.debt.sub(credit);
+        uint256 rlocked = repo.lockedCollateralAmount.sub(released);
+        uint256 rdebt = repo.debtAmount.sub(credit);
         uint256 rate = peek(); // to add rate getter!!!
         uint256 min = rdebt.wmul(collateralRatio).wmul(rate);
         uint256 deficiency = 0;
@@ -155,7 +147,7 @@ contract Treasurer is Ownable {
         return (rlocked >= min, deficiency);
     }
 
-    // wipe repo debt with yToken
+    // wipe repo debtAmount with yToken
     // series - yToken to mint
     // credit   - amount of yToken to wipe
     // released  - amount of collateral to free
@@ -163,22 +155,22 @@ contract Treasurer is Ownable {
         require(series < totalSeries, "treasurer-wipe-unissued-series");
         // if yToken has matured, should call resolve
         require(
-            now < yTokens[series].when(),
+            now < yTokens[series].maturityTime(),
             "treasurer-wipe-yToken-has-matured"
         );
 
         Repo memory repo = repos[series][msg.sender];
         require(
-            repo.locked >= released,
+            repo.lockedCollateralAmount >= released,
             "treasurer-wipe-release-more-than-locked"
         );
         require(
-            repo.debt >= credit,
-            "treasurer-wipe-wipe-more-debt-than-present"
+            repo.debtAmount >= credit,
+            "treasurer-wipe-wipe-more-debtAmount-than-present"
         );
         // if would be undercollateralized after freeing clean, fail
-        uint256 rlocked = repo.locked.sub(released);
-        uint256 rdebt = repo.debt.sub(credit);
+        uint256 rlocked = repo.lockedCollateralAmount.sub(released);
+        uint256 rdebt = repo.debtAmount.sub(credit);
         uint256 rate = peek(); // to add rate getter!!!
         uint256 min = rdebt.wmul(collateralRatio).wmul(rate);
         require(
@@ -193,9 +185,9 @@ contract Treasurer is Ownable {
         );
         yTokens[series].burnFrom(msg.sender, credit);
 
-        // reduce the collateral and the debt
-        repo.locked = repo.locked.sub(released);
-        repo.debt = repo.debt.sub(credit);
+        // reduce the collateral and the debtAmount
+        repo.lockedCollateralAmount = repo.lockedCollateralAmount.sub(released);
+        repo.debtAmount = repo.debtAmount.sub(credit);
         repos[series][msg.sender] = repo;
 
         // add collateral back to the unlocked
@@ -203,35 +195,35 @@ contract Treasurer is Ownable {
     }
 
     // liquidate a repo
-    // series - yToken of debt to buy
+    // series - yToken of debtAmount to buy
     // bum    - owner of the undercollateralized repo
-    // amount - amount of yToken debt to buy
+    // amount - amount of yToken debtAmount to buy
     function liquidate(uint256 series, address bum, uint256 amount) external {
         require(series < totalSeries, "treasurer-liquidate-unissued-series");
         //check that repo is in danger zone
         Repo memory repo = repos[series][bum];
         uint256 rate = peek(); // to add rate getter!!!
-        uint256 min = repo.debt.wmul(minCollateralRatio).wmul(rate);
-        require(repo.locked < min, "treasurer-bite-still-safe");
+        uint256 min = repo.debtAmount.wmul(minCollateralRatio).wmul(rate);
+        require(repo.lockedCollateralAmount < min, "treasurer-bite-still-safe");
 
         //burn tokens
         yTokens[series].burnByOwner(msg.sender, amount);
 
         //update repo
         uint256 bitten = amount.wmul(minCollateralRatio).wmul(rate);
-        repo.locked = repo.locked.sub(bitten);
-        repo.debt = repo.debt.sub(amount);
+        repo.lockedCollateralAmount = repo.lockedCollateralAmount.sub(bitten);
+        repo.debtAmount = repo.debtAmount.sub(amount);
         repos[series][bum] = repo;
         // send bitten funds
         msg.sender.transfer(bitten);
     }
 
     // trigger settlement
-    // series - yToken of debt to settle
+    // series - yToken of debtAmount to settle
     function settlement(uint256 series) external {
         require(series < totalSeries, "treasurer-settlement-unissued-series");
         require(
-            now > yTokens[series].when(),
+            now > yTokens[series].maturityTime(),
             "treasurer-settlement-yToken-hasnt-matured"
         );
         require(
@@ -247,7 +239,7 @@ contract Treasurer is Ownable {
     function withdraw(uint256 series, uint256 amount) external {
         require(series < totalSeries, "treasurer-withdraw-unissued-series");
         require(
-            now > yTokens[series].when(),
+            now > yTokens[series].maturityTime(),
             "treasurer-withdraw-yToken-hasnt-matured"
         );
         require(
@@ -267,7 +259,7 @@ contract Treasurer is Ownable {
     function close(uint256 series) external {
         require(series < totalSeries, "treasurer-close-unissued-series");
         require(
-            now > yTokens[series].when(),
+            now > yTokens[series].maturityTime(),
             "treasurer-withdraw-yToken-hasnt-matured"
         );
         require(
@@ -277,15 +269,17 @@ contract Treasurer is Ownable {
 
         Repo memory repo = repos[series][msg.sender];
         uint256 rate = settled[series]; // to add rate getter!!!
-        uint256 remainder = repo.debt.wmul(rate);
+        uint256 remainder = repo.debtAmount.wmul(rate);
 
         require(
-            repo.locked > remainder,
+            repo.lockedCollateralAmount > remainder,
             "treasurer-settlement-repo-underfunded-at-settlement"
         );
-        uint256 goods = repo.locked.sub(repo.debt.wmul(rate));
-        repo.locked = 0;
-        repo.debt = 0;
+        uint256 goods = repo.lockedCollateralAmount.sub(
+            repo.debtAmount.wmul(rate)
+        );
+        repo.lockedCollateralAmount = 0;
+        repo.debtAmount = 0;
         repos[series][msg.sender] = repo;
 
         msg.sender.transfer(goods);

@@ -37,7 +37,7 @@ contract("Treasurer", async accounts => {
     let address = await TreasurerInstance.yTokens(series);
     var yTokenInstance = await YToken.at(address);
     assert.equal(
-      await yTokenInstance.when(),
+      await yTokenInstance.maturityTime(),
       era,
       "New yToken has incorrect era"
     );
@@ -108,17 +108,17 @@ contract("Treasurer", async accounts => {
       "Did not make new yTokens"
     );
 
-    //check unlocked collateral, locked collateral
+    //check unlocked collateral, lockedCollateralAmount collateral
     const repo = await TreasurerInstance.repos(series, accounts[1]);
     assert.equal(
-      repo.locked.toString(),
+      repo.lockedCollateralAmount.toString(),
       web3.utils.toWei("1"),
       "Did not lock collateral"
     );
     assert.equal(
-      repo.debt.toString(),
+      repo.debtAmount.toString(),
       web3.utils.toWei("1"),
-      "Did not create debt"
+      "Did not create debtAmount"
     );
   });
 
@@ -153,15 +153,15 @@ contract("Treasurer", async accounts => {
       "Did not wipe yTokens"
     );
 
-    //check unlocked collateral, locked collateral
+    //check unlocked collateral, lockedCollateralAmount collateral
     const repo = await TreasurerInstance.repos(series, accounts[1]);
     assert.equal(
-      repo.locked.toString(),
+      repo.lockedCollateralAmount.toString(),
       web3.utils.toWei(".9"),
       "Did not unlock collateral"
     );
     assert.equal(
-      repo.debt.toString(),
+      repo.debtAmount.toString(),
       web3.utils.toWei(".9"),
       "Did not wipe debg"
     );
@@ -273,15 +273,15 @@ contract("Treasurer", async accounts => {
       "liquidation funds not received"
     );
 
-    //check unlocked collateral, locked collateral
+    //check unlocked collateral, lockedCollateralAmount collateral
     const repo = await TreasurerInstance.repos(series, accounts[2]);
     assert.equal(
-      repo.locked.toString(),
+      repo.lockedCollateralAmount.toString(),
       web3.utils.toWei(".45"),
       "Did not unlock collateral"
     );
     assert.equal(
-      repo.debt.toString(),
+      repo.debtAmount.toString(),
       web3.utils.toWei("50"),
       "Did not wipe debg"
     );
