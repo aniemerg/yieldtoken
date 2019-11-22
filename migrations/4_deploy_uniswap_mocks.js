@@ -1,25 +1,22 @@
 const UniswapFactoryMock = artifacts.require("UniswapFactoryMock");
 const Treasurer = artifacts.require("Treasurer");
 const Oracle = artifacts.require("Oracle");
-const yToken = artifacts.require("yToken");
+const {timestamp} = require("../src/utilities");
 
-setup = async () => {
+setup = async web3 => {
   let treasurer = await Treasurer.deployed();
   let oracle = await Oracle.deployed();
   var rate = web3.utils.toWei(".01");
   await oracle.set(rate);
   await treasurer.setOracle(oracle.address);
-  var thedate = Math.floor(Date.now() / 1000) + 24 * 60 * 60 * 30;
-  await treasurer.issue(thedate.toString());
+  var maturityDate = (await timestamp("latest", web3)) + 24 * 60 * 60 * 30;
+  await treasurer.issue(maturityDate.toString());
 };
 
 module.exports = function(deployer, network, accounts) {
   if (network == "development") {
-    //var apromise = setup(deployer.provider);
     deployer.deploy(UniswapFactoryMock).then(async () => {
-      await setup();
+      await setup(web3);
     });
-
-    //return apromise;
   }
 };

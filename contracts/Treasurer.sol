@@ -16,12 +16,7 @@ contract Treasurer is Ownable {
         uint256 debt; // Debt
     }
 
-    struct yieldT {
-        address where; // contract address of yToken
-        uint256 when; // maturity time of yToken
-    }
-
-    mapping(uint256 => yieldT) public yTokens;
+    mapping(uint256 => yToken) public yTokens;
     mapping(uint256 => mapping(address => Repo)) public repos; // locked ETH and debt
     mapping(address => uint256) public unlocked; // unlocked ETH
     mapping(uint256 => uint256) public settled; // settlement price of collateral
@@ -65,13 +60,11 @@ contract Treasurer is Ownable {
         require(when > now, "treasurer-issue-maturity-is-in-past");
         series = totalSeries;
         require(
-            yTokens[series].when == 0,
+            address(yTokens[series]) == address(0),
             "treasurer-issue-may-not-reissue-series"
         );
         yToken _token = new yToken(when);
-        address _a = address(_token);
-        yieldT memory yT = yieldT(_a, when);
-        yTokens[series] = yT;
+        yTokens[series] = _token;
         issuedSeries.push(series);
         totalSeries = totalSeries + 1;
     }
@@ -123,12 +116,10 @@ contract Treasurer is Ownable {
         // mint new yTokens
         // first, ensure yToken is initialized and matures in the future
         require(
-            yTokens[series].when > now,
+            yTokens[series].when() > now,
             "treasurer-make-invalid-or-matured-ytoken"
         );
-        yToken yT = yToken(yTokens[series].where);
-        address sender = msg.sender;
-        yT.mint(sender, made);
+        yTokens[series].mint(msg.sender, made);
     }
 
     // check that wipe leaves sufficient collateral
@@ -172,7 +163,7 @@ contract Treasurer is Ownable {
         require(series < totalSeries, "treasurer-wipe-unissued-series");
         // if yToken has matured, should call resolve
         require(
-            now < yTokens[series].when,
+            now < yTokens[series].when(),
             "treasurer-wipe-yToken-has-matured"
         );
 
@@ -196,12 +187,11 @@ contract Treasurer is Ownable {
         );
 
         //burn tokens
-        yToken yT = yToken(yTokens[series].where);
         require(
-            yT.balanceOf(msg.sender) > credit,
+            yTokens[series].balanceOf(msg.sender) > credit,
             "treasurer-wipe-insufficient-token-balance"
         );
-        yT.burnFrom(msg.sender, credit);
+        yTokens[series].burnFrom(msg.sender, credit);
 
         // reduce the collateral and the debt
         repo.locked = repo.locked.sub(released);
@@ -225,8 +215,7 @@ contract Treasurer is Ownable {
         require(repo.locked < min, "treasurer-bite-still-safe");
 
         //burn tokens
-        yToken yT = yToken(yTokens[series].where);
-        yT.burnByOwner(msg.sender, amount);
+        yTokens[series].burnByOwner(msg.sender, amount);
 
         //update repo
         uint256 bitten = amount.wmul(minCollateralRatio).wmul(rate);
@@ -242,7 +231,7 @@ contract Treasurer is Ownable {
     function settlement(uint256 series) external {
         require(series < totalSeries, "treasurer-settlement-unissued-series");
         require(
-            now > yTokens[series].when,
+            now > yTokens[series].when(),
             "treasurer-settlement-yToken-hasnt-matured"
         );
         require(
@@ -258,7 +247,7 @@ contract Treasurer is Ownable {
     function withdraw(uint256 series, uint256 amount) external {
         require(series < totalSeries, "treasurer-withdraw-unissued-series");
         require(
-            now > yTokens[series].when,
+            now > yTokens[series].when(),
             "treasurer-withdraw-yToken-hasnt-matured"
         );
         require(
@@ -266,8 +255,7 @@ contract Treasurer is Ownable {
             "treasurer-settlement-settlement-not-yet-called"
         );
 
-        yToken yT = yToken(yTokens[series].where);
-        yT.burnByOwner(msg.sender, amount);
+        yTokens[series].burnByOwner(msg.sender, amount);
 
         uint256 rate = settled[series];
         uint256 goods = amount.wmul(rate);
@@ -279,7 +267,7 @@ contract Treasurer is Ownable {
     function close(uint256 series) external {
         require(series < totalSeries, "treasurer-close-unissued-series");
         require(
-            now > yTokens[series].when,
+            now > yTokens[series].when(),
             "treasurer-withdraw-yToken-hasnt-matured"
         );
         require(
