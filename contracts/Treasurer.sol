@@ -52,7 +52,10 @@ contract Treasurer is Ownable {
     }
 
     // issue new yToken
-    function issue(uint256 maturityTime) external returns (uint256 series) {
+    function createNewYToken(uint256 maturityTime)
+        external
+        returns (uint256 series)
+    {
         require(maturityTime > now, "treasurer-issue-maturity-is-in-past");
         series = totalSeries;
         require(
@@ -66,10 +69,10 @@ contract Treasurer is Ownable {
     }
 
     // add collateral to repo
-    function join() external payable {
+    function topUpCollateral() external payable {
         require(
             msg.value >= 0,
-            "treasurer-join-collateralRatio-include-deposit"
+            "treasurer-topUpCollateral-collateralRatio-include-deposit"
         );
         unlocked[msg.sender] = unlocked[msg.sender].add(msg.value);
     }
@@ -77,22 +80,25 @@ contract Treasurer is Ownable {
     // remove collateral from repo
     // amount - amount of ETH to remove from unlocked account
     // TO-DO: Update as described in https://diligence.consensys.net/posts/2019/09/stop-using-soliditys-transfer-now/
-    function exit(uint256 amount) external {
-        require(amount >= 0, "treasurer-exit-insufficient-balance");
+    function withdrawCollateral(uint256 amount) external {
+        require(
+            amount >= 0,
+            "treasurer-withdrawCollateral-insufficient-balance"
+        );
         unlocked[msg.sender] = unlocked[msg.sender].sub(amount);
         msg.sender.transfer(amount);
     }
 
-    // make a new yToken
+    // issueYToken a new yToken
     // series - yToken to mint
     // made   - amount of yToken to mint
     // paid   - amount of collateral to lock up
-    function make(uint256 series, uint256 made, uint256 paid) external {
+    function issueYToken(uint256 series, uint256 made, uint256 paid) external {
         require(series < totalSeries, "treasurer-make-unissued-series");
         // first check if sufficient capital to lock up
         require(
             unlocked[msg.sender] >= paid,
-            "treasurer-make-insufficient-unlocked-to-lock"
+            "treasurer-issueYToken-insufficient-unlocked-to-lock"
         );
 
         Repo memory repo = repos[series][msg.sender];
@@ -100,7 +106,7 @@ contract Treasurer is Ownable {
         uint256 min = made.wmul(collateralRatio).wmul(rate);
         require(
             paid >= min,
-            "treasurer-make-insufficient-collateral-for-those-tokens"
+            "treasurer-issueYToken-insufficient-collateral-for-those-tokens"
         );
 
         // lock msg.sender Collateral, add debtAmount
@@ -113,7 +119,7 @@ contract Treasurer is Ownable {
         // first, ensure yToken is initialized and matures in the future
         require(
             yTokens[series].maturityTime() > now,
-            "treasurer-make-invalid-or-matured-ytoken"
+            "treasurer-issueYToken-invalid-or-matured-ytoken"
         );
         yTokens[series].mint(msg.sender, made);
     }

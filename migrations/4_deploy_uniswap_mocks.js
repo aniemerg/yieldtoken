@@ -10,7 +10,7 @@ setup = async web3 => {
   await oracle.set(rate);
   await treasurer.setOracle(oracle.address);
   var maturityDate = (await timestamp("latest", web3)) + 24 * 60 * 60 * 30;
-  await treasurer.issue(maturityDate.toString());
+  await treasurer.createNewYToken(maturityDate.toString());
 };
 
 module.exports = function(deployer, network, accounts) {
