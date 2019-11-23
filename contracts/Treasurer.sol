@@ -2,6 +2,7 @@ pragma solidity ^0.5.2;
 
 import "./yToken.sol";
 import "./oracle/Oracle.sol";
+import "openzeppelin-solidity/contracts/token/ERC20/ERC20.sol";
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
 import "./libraries/ExponentialOperations.sol";
 import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
@@ -24,11 +25,13 @@ contract Treasurer is Ownable {
     uint256 public collateralRatio; // collateralization ratio
     uint256 public minCollateralRatio; // minimum collateralization ratio
     uint256 public totalSeries = 0;
-
-    constructor(uint256 collateralRatio_, uint256 minCollateralRatio_)
-        public
-        Ownable()
-    {
+    ERC20 public collateralToken;
+    constructor(
+        ERC20 _collateralToken,
+        uint256 collateralRatio_,
+        uint256 minCollateralRatio_
+    ) public Ownable() {
+        collateralToken = _collateralToken;
         collateralRatio = collateralRatio_;
         minCollateralRatio = minCollateralRatio_;
     }
@@ -69,12 +72,16 @@ contract Treasurer is Ownable {
     }
 
     // add collateral to repo
-    function topUpCollateral() external payable {
+    function topUpCollateral(uint256 amountCollateral) external payable {
         require(
-            msg.value >= 0,
+            collateralToken.transferFrom(
+                msg.sender,
+                address(this),
+                amountCollateral
+            ),
             "treasurer-topUpCollateral-collateralRatio-include-deposit"
         );
-        unlocked[msg.sender] = unlocked[msg.sender].add(msg.value);
+        unlocked[msg.sender] = unlocked[msg.sender].add(amountCollateral);
     }
 
     // remove collateral from repo
@@ -86,7 +93,7 @@ contract Treasurer is Ownable {
             "treasurer-withdrawCollateral-insufficient-balance"
         );
         unlocked[msg.sender] = unlocked[msg.sender].sub(amount);
-        msg.sender.transfer(amount);
+        collateralToken.transfer(msg.sender, amount);
     }
 
     // issueYToken a new yToken
@@ -225,7 +232,7 @@ contract Treasurer is Ownable {
         repo.debtAmount = repo.debtAmount.sub(amount);
         repos[series][bum] = repo;
         // send bitten funds
-        msg.sender.transfer(bitten);
+        collateralToken.transfer(msg.sender, bitten);
     }
 
     // trigger settlement
@@ -261,7 +268,7 @@ contract Treasurer is Ownable {
 
         uint256 rate = settled[series];
         uint256 goods = amount.wmul(rate);
-        msg.sender.transfer(goods);
+        collateralToken.transfer(msg.sender, goods);
     }
 
     // series - matured yToken
@@ -292,6 +299,6 @@ contract Treasurer is Ownable {
         repo.debtAmount = 0;
         repos[series][msg.sender] = repo;
 
-        msg.sender.transfer(goods);
+        collateralToken.transfer(msg.sender, goods);
     }
 }
