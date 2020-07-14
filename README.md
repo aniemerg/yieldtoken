@@ -1,3 +1,9 @@
+**This Software is archived and no longer maintained. For those interested in the Yield Protocol, please see: https://github.com/yieldprotocol **
+
+
+
+
+
 # YieldToken
 
 YieldToken is an implementation of zero-coupon Dai bonds. It is inspired by the paper ["The Yield Protocol: On-Chain Lending With
