@@ -1,268 +1,304 @@
 pragma solidity ^0.5.2;
-pragma experimental ABIEncoderV2;
 
-import './yToken.sol';
-import './Oracle.sol';
+import "./yToken.sol";
+import "./oracle/Oracle.sol";
+import "openzeppelin-solidity/contracts/token/ERC20/ERC20.sol";
+import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "./libraries/ExponentialOperations.sol";
+import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
 
+contract Treasurer is Ownable {
+    using SafeMath for uint256;
+    using ExponentialOperations for uint256;
 
-
-contract Treasurer {
-  struct Repo {
-      uint256 locked;   // Locked Collateral
-      uint256 unminted;   // unminted
-      uint256 debt;     // Debt
-  }
-
-  struct yieldT {
-      address where;  // contract address of yToken
-      uint256 when;   // maturity time of yToken
-  }
-
-  mapping (uint    => yieldT) public yTokens;
-  mapping (uint    => mapping (address => Repo)) public repos; // locked ETH and debt
-  mapping (address => uint) public unlocked;  // unlocked ETH
-  mapping (uint    => uint) public settled; // settlement price of collateral
-  uint[] public issuedSeries;
-  address public owner;
-  address public oracle;
-  uint public collateralRatio;                        // collateralization ratio
-  uint public minCollateralRatio;                     // minimum collateralization ratio
-  uint public totalSeries = 0;
-
-  constructor(address owner_, uint collateralRatio_, uint minCollateralRatio_) public {
-    owner = owner_;
-    collateralRatio = collateralRatio_;
-    minCollateralRatio = minCollateralRatio_;
-  }
-
-  // --- Math ---
-  uint constant WAD = 10 ** 18;
-  uint constant RAY = 10 ** 27;
-  function add(uint x, uint y) internal pure returns (uint z) {
-    z = x + y;
-    require(z >= x, "treasurer-add-z-not-greater-eq-x");
-  }
-
-  function sub(uint x, uint y) internal pure returns (uint z) {
-    require((z = x - y) <= x, "treasurer-sub-failed");
-  }
-
-  function mul(uint x, uint y) internal pure returns (uint z) {
-    require(y == 0 || (z = x * y) / y == x,  "treasurer-mul-failed");
-  }
-
-  function wmul(uint x, uint y) internal pure returns (uint z) {
-    z = add(mul(x, y), WAD / 2) / WAD;
-  }
-
-  function wdiv(uint x, uint y) internal pure returns (uint z) {
-    z = add(mul(x, WAD), y / 2) / y;
-  }
-
-  // --- Views ---
-
-  // return unlocked collateral balance
-  function balance(address usr) public view returns (uint){
-    return unlocked[usr];
-  }
-
-  // --- Actions ---
-
-  // provide address to oracle
-  // oracle_ - address of the oracle contract
-  function setOracle(address oracle_) external {
-    require(msg.sender == owner);
-    oracle = oracle_;
-  }
-
-  // get oracle value
-  function peek() public view returns (uint r){
-    Oracle _oracle = Oracle(oracle);
-    r = _oracle.read();
-  }
-
-  // issue new yToken
-  function issue(uint256 when) external returns (uint series) {
-    require(msg.sender == owner, "treasurer-issue-only-owner-may-issue");
-    require(when > now, "treasurer-issue-maturity-is-in-past");
-    series = totalSeries;
-    require(yTokens[series].when == 0, "treasurer-issue-may-not-reissue-series");
-    yToken _token = new yToken(when);
-    address _a = address(_token);
-    yieldT memory yT = yieldT(_a, when);
-    yTokens[series] = yT;
-    issuedSeries.push(series);
-    totalSeries = totalSeries + 1;
-  }
-
-  // add collateral to repo
-  function join() external payable {
-    require(msg.value >= 0, "treasurer-join-collateralRatio-include-deposit");
-    unlocked[msg.sender] = add(unlocked[msg.sender], msg.value);
-  }
-
-  // remove collateral from repo
-  // amount - amount of ETH to remove from unlocked account
-  // TO-DO: Update as described in https://diligence.consensys.net/posts/2019/09/stop-using-soliditys-transfer-now/
-  function exit(uint amount) external {
-    require(amount >= 0, "treasurer-exit-insufficient-balance");
-    unlocked[msg.sender] = sub(unlocked[msg.sender], amount);
-    msg.sender.transfer(amount);
-  }
-
-  // make a new yToken
-  // series - yToken to mint
-  // made   - amount of yToken to mint
-  // paid   - amount of collateral to lock up
-  function make(uint series, uint made, uint paid) external {
-    require(series < totalSeries, "treasurer-make-unissued-series");
-    // first check if sufficient capital to lock up
-    require(unlocked[msg.sender] >= paid, "treasurer-make-insufficient-unlocked-to-lock");
-
-    Repo memory repo = repos[series][msg.sender];
-    uint rate        = peek(); // to add rate getter!!!
-    uint256 min      = wmul(wmul(made, collateralRatio), rate);
-    require (paid >= min, "treasurer-make-insufficient-collateral-for-those-tokens");
-
-    // lock msg.sender Collateral, add debt
-    unlocked[msg.sender]      = sub(unlocked[msg.sender], paid);
-    repo.locked               = add(repo.locked, paid);
-    repo.debt                 = add(repo.debt, made);
-    repos[series][msg.sender] = repo;
-
-    // mint new yTokens
-    // first, ensure yToken is initialized and matures in the future
-    require(yTokens[series].when > now, "treasurer-make-invalid-or-matured-ytoken");
-    yToken yT  = yToken(yTokens[series].where);
-    address sender = msg.sender;
-    yT.mint(sender, made);
-  }
-
-  // check that wipe leaves sufficient collateral
-  // series - yToken to mint
-  // credit   - amount of yToken to wipe
-  // released  - amount of collateral to free
-  // returns (true, 0) if sufficient collateral would remain
-  // returns (false, deficiency) if sufficient collateral would not remain
-  function wipeCheck(uint series, uint credit, uint released) public view returns (bool, uint) {
-    require(series < totalSeries, "treasurer-wipeCheck-unissued-series");
-    Repo memory repo        = repos[series][msg.sender];
-    require(repo.locked >= released, "treasurer-wipe-release-more-than-locked");
-    require(repo.debt >= credit,     "treasurer-wipe-wipe-more-debt-than-present");
-    // if would be undercollateralized after freeing clean, fail
-    uint rlocked  = sub(repo.locked, released);
-    uint rdebt    = sub(repo.debt, credit);
-    uint rate     = peek(); // to add rate getter!!!
-    uint256 min   = wmul(wmul(rdebt, collateralRatio), rate);
-    uint deficiency = 0;
-    if (min >= rlocked){
-      deficiency = sub(min, rlocked);
+    struct Repo {
+        uint256 lockedCollateralAmount;
+        uint256 debtAmount;
     }
-    return (rlocked >= min, deficiency);
-  }
 
-  // wipe repo debt with yToken
-  // series - yToken to mint
-  // credit   - amount of yToken to wipe
-  // released  - amount of collateral to free
-  function wipe(uint series, uint credit, uint released) external {
-    require(series < totalSeries, "treasurer-wipe-unissued-series");
-    // if yToken has matured, should call resolve
-    require(now < yTokens[series].when, "treasurer-wipe-yToken-has-matured");
+    mapping(uint256 => yToken) public yTokens;
+    mapping(uint256 => mapping(address => Repo)) public repos; // lockedCollateralAmount ETH and debtAmount
+    mapping(address => uint256) public unlocked; // unlocked ETH
+    mapping(uint256 => uint256) public settled; // settlement price of collateral
+    uint256[] public issuedSeries;
+    Oracle public oracle;
+    uint256 public collateralRatio; // collateralization ratio
+    uint256 public minCollateralRatio; // minimum collateralization ratio
+    uint256 public totalSeries = 0;
+    ERC20 public collateralToken;
+    constructor(
+        ERC20 _collateralToken,
+        uint256 collateralRatio_,
+        uint256 minCollateralRatio_
+    ) public Ownable() {
+        collateralToken = _collateralToken;
+        collateralRatio = collateralRatio_;
+        minCollateralRatio = minCollateralRatio_;
+    }
 
-    Repo memory repo        = repos[series][msg.sender];
-    require(repo.locked >= released, "treasurer-wipe-release-more-than-locked");
-    require(repo.debt >= credit,     "treasurer-wipe-wipe-more-debt-than-present");
-    // if would be undercollateralized after freeing clean, fail
-    uint rlocked  = sub(repo.locked, released);
-    uint rdebt    = sub(repo.debt, credit);
-    uint rate     = peek(); // to add rate getter!!!
-    uint256 min   = wmul(wmul(rdebt, collateralRatio), rate);
-    require(rlocked >= min, "treasurer-wipe-insufficient-remaining-collateral");
+    // --- Actions ---
 
-    //burn tokens
-    yToken yT  = yToken(yTokens[series].where);
-    require(yT.balanceOf(msg.sender) > credit, "treasurer-wipe-insufficient-token-balance");
-    yT.burnFrom(msg.sender, credit);
+    // provide address to oracle
+    // oracle_ - address of the oracle contract
+    function setOracle(Oracle oracle_) external onlyOwner {
+        require(address(oracle) == address(0), "oracle was already set");
+        oracle = oracle_;
+    }
 
-    // reduce the collateral and the debt
-    repo.locked               = sub(repo.locked, released);
-    repo.debt                 = sub(repo.debt, credit);
-    repos[series][msg.sender] = repo;
+    // get oracle value
+    function getSettlmentVSCollateralTokenRate()
+        public
+        view
+        returns (uint256 r)
+    {
+        r = oracle.read();
+    }
 
-    // add collateral back to the unlocked
-    unlocked[msg.sender] = add(unlocked[msg.sender], released);
-  }
+    // issue new yToken
+    function createNewYToken(uint256 maturityTime)
+        external
+        returns (uint256 series)
+    {
+        require(maturityTime > now, "treasurer-issue-maturity-is-in-past");
+        series = totalSeries;
+        require(
+            address(yTokens[series]) == address(0),
+            "treasurer-issue-may-not-reissue-series"
+        );
+        yToken _token = new yToken(maturityTime);
+        yTokens[series] = _token;
+        issuedSeries.push(series);
+        totalSeries = totalSeries + 1;
+    }
 
-  // liquidate a repo
-  // series - yToken of debt to buy
-  // bum    - owner of the undercollateralized repo
-  // amount - amount of yToken debt to buy
-  function liquidate(uint series, address bum, uint256 amount) external {
-    require(series < totalSeries, "treasurer-liquidate-unissued-series");
-    //check that repo is in danger zone
-    Repo memory repo  = repos[series][bum];
-    uint rate         = peek(); // to add rate getter!!!
-    uint256 min       = wmul(wmul(repo.debt, minCollateralRatio), rate);
-    require(repo.locked < min, "treasurer-bite-still-safe");
+    // add collateral to repo
+    function topUpCollateral(uint256 amountCollateral) external payable {
+        require(
+            collateralToken.transferFrom(
+                msg.sender,
+                address(this),
+                amountCollateral
+            ),
+            "treasurer-topUpCollateral-collateralRatio-include-deposit"
+        );
+        unlocked[msg.sender] = unlocked[msg.sender].add(amountCollateral);
+    }
 
-    //burn tokens
-    yToken yT  = yToken(yTokens[series].where);
-    yT.burnByOwner(msg.sender, amount);
+    // remove collateral from repo
+    // amount - amount of ETH to remove from unlocked account
+    // TO-DO: Update as described in https://diligence.consensys.net/posts/2019/09/stop-using-soliditys-transfer-now/
+    function withdrawCollateral(uint256 amount) external {
+        require(
+            amount >= 0,
+            "treasurer-withdrawCollateral-insufficient-balance"
+        );
+        unlocked[msg.sender] = unlocked[msg.sender].sub(amount);
+        collateralToken.transfer(msg.sender, amount);
+    }
 
-    //update repo
-    uint256 bitten     = wmul(wmul(amount, minCollateralRatio), rate);
-    repo.locked        = sub(repo.locked, bitten);
-    repo.debt          = sub(repo.debt, amount);
-    repos[series][bum] = repo;
+    // issueYToken a new yToken
+    // series - yToken to mint
+    // made   - amount of yToken to mint
+    // paid   - amount of collateral to lock up
+    function issueYToken(uint256 series, uint256 made, uint256 paid) external {
+        require(series < totalSeries, "treasurer-make-unissued-series");
+        // first check if sufficient capital to lock up
+        require(
+            unlocked[msg.sender] >= paid,
+            "treasurer-issueYToken-insufficient-unlocked-to-lock"
+        );
 
-    // send bitten funds
-    msg.sender.transfer(bitten);
-  }
+        Repo memory repo = repos[series][msg.sender];
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
+        uint256 min = made.wmul(collateralRatio).wmul(rate);
+        require(
+            paid >= min,
+            "treasurer-issueYToken-insufficient-collateral-for-those-tokens"
+        );
 
-  // trigger settlement
-  // series - yToken of debt to settle
-  function settlement(uint series) external {
-    require(series < totalSeries, "treasurer-settlement-unissued-series");
-    require(now > yTokens[series].when, "treasurer-settlement-yToken-hasnt-matured");
-    require(settled[series] == 0, "treasurer-settlement-settlement-already-called");
-    settled[series] = peek();
-  }
+        // lock msg.sender Collateral, add debtAmount
+        unlocked[msg.sender] = unlocked[msg.sender].sub(paid);
+        repo.lockedCollateralAmount = repo.lockedCollateralAmount.add(paid);
+        repo.debtAmount = repo.debtAmount.add(made);
+        repos[series][msg.sender] = repo;
 
+        // mint new yTokens
+        // first, ensure yToken is initialized and matures in the future
+        require(
+            yTokens[series].maturityTime() > now,
+            "treasurer-issueYToken-invalid-or-matured-ytoken"
+        );
+        yTokens[series].mint(msg.sender, made);
+    }
 
-  // redeem tokens for underlying Ether
-  // series - matured yToken
-  // amount    - amount of yToken to close
-  function withdraw(uint series, uint256 amount) external {
-    require(series < totalSeries, "treasurer-withdraw-unissued-series");
-    require(now > yTokens[series].when, "treasurer-withdraw-yToken-hasnt-matured");
-    require(settled[series] != 0, "treasurer-settlement-settlement-not-yet-called");
+    // check that wipe leaves sufficient collateral
+    // series - yToken to mint
+    // credit   - amount of yToken to wipe
+    // released  - amount of collateral to free
+    // returns (true, 0) if sufficient collateral would remain
+    // returns (false, deficiency) if sufficient collateral would not remain
+    function wipeCheck(uint256 series, uint256 credit, uint256 released)
+        public
+        view
+        returns (bool, uint256)
+    {
+        require(series < totalSeries, "treasurer-wipeCheck-unissued-series");
+        Repo memory repo = repos[series][msg.sender];
+        require(
+            repo.lockedCollateralAmount >= released,
+            "treasurer-wipe-release-more-than-locked"
+        );
+        require(
+            repo.debtAmount >= credit,
+            "treasurer-wipe-wipe-more-debtAmount-than-present"
+        );
+        // if would be undercollateralized after freeing clean, fail
+        uint256 rlocked = repo.lockedCollateralAmount.sub(released);
+        uint256 rdebt = repo.debtAmount.sub(credit);
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
+        uint256 min = rdebt.wmul(collateralRatio).wmul(rate);
+        uint256 deficiency = 0;
+        if (min >= rlocked) {
+            deficiency = min.sub(rlocked);
+        }
+        return (rlocked >= min, deficiency);
+    }
 
-    yToken yT  = yToken(yTokens[series].where);
-    yT.burnByOwner(msg.sender, amount);
+    // wipe repo debtAmount with yToken
+    // series - yToken to mint
+    // credit   - amount of yToken to wipe
+    // released  - amount of collateral to free
+    function wipe(uint256 series, uint256 credit, uint256 released) external {
+        require(series < totalSeries, "treasurer-wipe-unissued-series");
+        // if yToken has matured, should call resolve
+        require(
+            now < yTokens[series].maturityTime(),
+            "treasurer-wipe-yToken-has-matured"
+        );
 
-    uint rate     = settled[series];
-    uint256 goods = wmul(amount, rate);
-    msg.sender.transfer(goods);
-  }
+        Repo memory repo = repos[series][msg.sender];
+        require(
+            repo.lockedCollateralAmount >= released,
+            "treasurer-wipe-release-more-than-locked"
+        );
+        require(
+            repo.debtAmount >= credit,
+            "treasurer-wipe-wipe-more-debtAmount-than-present"
+        );
+        // if would be undercollateralized after freeing clean, fail
+        uint256 rlocked = repo.lockedCollateralAmount.sub(released);
+        uint256 rdebt = repo.debtAmount.sub(credit);
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
+        uint256 min = rdebt.wmul(collateralRatio).wmul(rate);
+        require(
+            rlocked >= min,
+            "treasurer-wipe-insufficient-remaining-collateral"
+        );
 
-  // close repo and retrieve remaining Ether
-  // series - matured yToken
-  function close(uint series) external {
-    require(series < totalSeries, "treasurer-close-unissued-series");
-    require(now > yTokens[series].when, "treasurer-withdraw-yToken-hasnt-matured");
-    require(settled[series] != 0, "treasurer-settlement-settlement-not-yet-called");
+        //burn tokens
+        require(
+            yTokens[series].balanceOf(msg.sender) > credit,
+            "treasurer-wipe-insufficient-token-balance"
+        );
+        yTokens[series].burnFrom(msg.sender, credit);
 
-    Repo memory repo = repos[series][msg.sender];
-    uint rate        = settled[series]; // to add rate getter!!!
-    uint remainder   = wmul(repo.debt, rate);
+        // reduce the collateral and the debtAmount
+        repo.lockedCollateralAmount = repo.lockedCollateralAmount.sub(released);
+        repo.debtAmount = repo.debtAmount.sub(credit);
+        repos[series][msg.sender] = repo;
 
-    require(repo.locked > remainder, "treasurer-settlement-repo-underfunded-at-settlement" );
-    uint256 goods  = sub(repo.locked, wmul(repo.debt, rate));
-    repo.locked    = 0;
-    repo.debt      = 0;
-    repos[series][msg.sender] = repo;
+        // add collateral back to the unlocked
+        unlocked[msg.sender] = unlocked[msg.sender].add(released);
+    }
 
-    msg.sender.transfer(goods);
-  }
+    // liquidate a repo
+    // series - yToken of debtAmount to buy
+    // bum    - owner of the undercollateralized repo
+    // amount - amount of yToken debtAmount to buy
+    function liquidate(uint256 series, address bum, uint256 amount) external {
+        require(series < totalSeries, "treasurer-liquidate-unissued-series");
+        //check that repo is in danger zone
+        Repo memory repo = repos[series][bum];
+        uint256 rate = getSettlmentVSCollateralTokenRate(); // to add rate getter!!!
+        uint256 min = repo.debtAmount.wmul(minCollateralRatio).wmul(rate);
+        require(repo.lockedCollateralAmount < min, "treasurer-bite-still-safe");
+
+        //burn tokens
+        yTokens[series].burnByOwner(msg.sender, amount);
+
+        //update repo
+        uint256 bitten = amount.wmul(minCollateralRatio).wmul(rate);
+        repo.lockedCollateralAmount = repo.lockedCollateralAmount.sub(bitten);
+        repo.debtAmount = repo.debtAmount.sub(amount);
+        repos[series][bum] = repo;
+        // send bitten funds
+        collateralToken.transfer(msg.sender, bitten);
+    }
+
+    // trigger settlement
+    // series - yToken of debtAmount to settle
+    function settlement(uint256 series) external {
+        require(series < totalSeries, "treasurer-settlement-unissued-series");
+        require(
+            now > yTokens[series].maturityTime(),
+            "treasurer-settlement-yToken-hasnt-matured"
+        );
+        require(
+            settled[series] == 0,
+            "treasurer-settlement-settlement-already-called"
+        );
+        settled[series] = getSettlmentVSCollateralTokenRate();
+    }
+
+    // redeem tokens for underlying Ether
+    // series - matured yToken
+    // amount    - amount of yToken to close
+    function withdraw(uint256 series, uint256 amount) external {
+        require(series < totalSeries, "treasurer-withdraw-unissued-series");
+        require(
+            now > yTokens[series].maturityTime(),
+            "treasurer-withdraw-yToken-hasnt-matured"
+        );
+        require(
+            settled[series] != 0,
+            "treasurer-settlement-settlement-not-yet-called"
+        );
+
+        yTokens[series].burnByOwner(msg.sender, amount);
+
+        uint256 rate = settled[series];
+        uint256 goods = amount.wmul(rate);
+        collateralToken.transfer(msg.sender, goods);
+    }
+
+    // series - matured yToken
+    // close repo and retrieve remaining Ether
+    function close(uint256 series) external {
+        require(series < totalSeries, "treasurer-close-unissued-series");
+        require(
+            now > yTokens[series].maturityTime(),
+            "treasurer-withdraw-yToken-hasnt-matured"
+        );
+        require(
+            settled[series] != 0,
+            "treasurer-settlement-settlement-not-yet-called"
+        );
+
+        Repo memory repo = repos[series][msg.sender];
+        uint256 rate = settled[series]; // to add rate getter!!!
+        uint256 remainder = repo.debtAmount.wmul(rate);
+
+        require(
+            repo.lockedCollateralAmount > remainder,
+            "treasurer-settlement-repo-underfunded-at-settlement"
+        );
+        uint256 goods = repo.lockedCollateralAmount.sub(
+            repo.debtAmount.wmul(rate)
+        );
+        repo.lockedCollateralAmount = 0;
+        repo.debtAmount = 0;
+        repos[series][msg.sender] = repo;
+
+        collateralToken.transfer(msg.sender, goods);
+    }
 }

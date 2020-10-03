@@ -4,7 +4,4 @@ pragma solidity ^0.5.2;
 // available when working from truffle console.
 import "@gnosis.pm/mock-contract/contracts/MockContract.sol";
 
-
-contract DoesNothing {
-
-}
+contract DoesNothing {}

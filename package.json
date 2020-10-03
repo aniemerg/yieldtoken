@@ -7,7 +7,9 @@
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "./node_modules/.bin/eslint .",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prettier": "./node_modules/.bin/prettier --write 'contracts/**/*.sol'"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +23,10 @@
     "web3": "^1.2.1"
   },
   "devDependencies": {
-    "@gnosis.pm/mock-contract": "^3.0.7"
+    "@gnosis.pm/mock-contract": "^3.0.7",
+    "prettier": "^1.19.1",
+    "prettier-plugin-solidity": "^1.0.0-alpha.34",
+    "solidity-coverage": "^0.6.7",
+    "truffle": "^5.0.44"
   }
 }
